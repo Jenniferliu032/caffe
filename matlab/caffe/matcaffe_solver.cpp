@@ -5,6 +5,7 @@
 // Note that for matlab, we will simply use float as the data type.
 //
 // Adding caffe::solver class
+// Makefile needs reconfigration
 
 #include <string>
 #include <vector>
