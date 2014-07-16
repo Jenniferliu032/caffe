@@ -53,7 +53,7 @@ else
   matcaffe_init_solver();
 end
 
-if nargin < 1
+if nargin < 1 
   % For demo purposes we will use the peppers image
   im = imread('peppers.png');
 end
@@ -61,38 +61,38 @@ end
 % prepare oversampled input
 % input_data is Height x Width x Channel x Num
 tic;input_data = {prepare_image_cifar(im)};
-toc;
+toc;save input_data.mat input_data;
 fprintf('image size: %d, %d\n',size(input_data,1),size(input_data,2));
 % do forward pass to get scores
 % scores are now Width x Height x Channels x Num
-tic;
+%for m = 1:100
+
 scores = caffe('forward', input_data);
-toc;
-% save scores.mat scores;
+fprintf('Done with forward pass.\n');
 
 scores = scores{1};
-% size(scores)
 scores = squeeze(scores);
-%scores = mean(scores,2);
+
 
 [~,maxlabel] = max(scores);
 
 % you can also get network weights by calling
-layers = caffe('get_weights');
 
-%save layers_cifar.mat layers;
-y = zeros(size(scores));
- 
-for m = 1:length(maxlabel)
-    y(maxlabel(m),m)=1; 
+layers = caffe('get_weights');
+fprintf('Done with get weights\n');
+caffe('set_weights',layers);
+fprintf('Done with set weights\n');
+
+
+for n = 1:length(maxlabel)
+  y = zeros(size(scores));
+    y(maxlabel(n),n)=1; 
 end
 
 delta = y - scores;
-% save delta.mat delta;
-tic;
 f = caffe('backward',{reshape(delta,[1,1,10,10])});
-toc;
-% save f.mat f;
-tic;
+fprintf('Done with backward\n');
+d = caffe('get_all_diff');
+fprintf('Done with get diff\n');
 caffe('update');
-toc;
+fprintf('Done with update\n');
