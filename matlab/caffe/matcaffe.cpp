@@ -334,7 +334,7 @@ static void set_weights(MEX_ARGS) {
   }
   int num_layers = mxGetNumberOfElements(mx_weights);
   for (int i = 0; i < num_layers; ++i) {
-    const mxArray* layer_name= mxGetField(mx_weights,i,"layer_name");
+    const mxArray* layer_name= mxGetField(mx_weights,i,"layer_names");
     const mxArray* weights= mxGetField(mx_weights,i,"weights");
     do_set_layer_weights(layer_name,weights);
   }
