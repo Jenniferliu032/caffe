@@ -1,4 +1,4 @@
-function [scores, maxlabel] = matcaffe_demo_minist(use_gpu)
+function [scores, maxlabel] = matcaffe_demo_mnist(use_gpu)
 
 % init caffe network (spews logging info)
 if exist('use_gpu', 'var')
@@ -7,7 +7,7 @@ else
   matcaffe_init_minist();
 end
 layers = caffe('get_weights');
-save layers_mnist_00.mat layers;
+%save layers_mnist_00.mat layers;
 if nargin < 1 
   % For demo purposes we will use the peppers image
   im = imread('peppers.png');
