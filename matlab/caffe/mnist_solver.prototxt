@@ -23,4 +23,3 @@ snapshot: 10000
 snapshot_prefix: "mnist10"
 # solver mode: 0 for CPU and 1 for GPU
 solver_mode: 1
-~                   
