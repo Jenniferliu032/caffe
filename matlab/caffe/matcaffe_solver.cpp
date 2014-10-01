@@ -639,7 +639,7 @@ struct handler_registry {
 static handler_registry handlers[] = {
   // Public API functions
   { "forward",            forward         },
-  { "forward_test",		  forward_test    },	
+  { "forward_test",	  forward_test    },	
   { "backward",           backward        },
   { "init",               init            },
   { "presolve",           presolve        },
