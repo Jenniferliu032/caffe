@@ -5,7 +5,6 @@
 // Note that for matlab, we will simply use float as the data type.
 //
 // Adding caffe::solver class
-// Makefile needs reconfigration
 
 #include <string>
 #include <vector>
@@ -14,6 +13,39 @@
 #include "caffe/caffe.hpp"
 
 #define MEX_ARGS int nlhs, mxArray **plhs, int nrhs, const mxArray **prhs
+
+// The interim macro that simply strips the excess and ends up with the required macro
+#define CHECK_EQ_X(A,B,C,FUNC, ...) FUNC
+
+// The macro that the programmer uses
+#define CHECK_EQ(...)  CHECK_EQ_X(__VA_ARGS__,  \
+                       CHECK_EQ_3(__VA_ARGS__),    \
+                       CHECK_EQ_2(__VA_ARGS__))
+
+#define CHECK_EQ_2(a, b)  do {                                  \
+  if ( (a) != (b) ) {                                           \
+    fprintf(stderr, "%s:%d: Check failed because %s != %s\n",   \
+            __FILE__, __LINE__, #a, #b);                        \
+    mexErrMsgTxt("Error in CHECK_EQ");                          \
+  }                                                             \
+} while (0);
+
+#define CHECK_EQ_3(a, b, m)  do {                               \
+  if ( (a) != (b) ) {                                           \
+    fprintf(stderr, "%s:%d: Check failed because %s != %s\n",   \
+            __FILE__, __LINE__, #a, #b);                        \
+    fprintf(stderr, "%s:%d: %s\n",                              \
+            __FILE__, __LINE__, #m);                            \
+    mexErrMsgTxt(#m);                                           \
+  }                                                             \
+} while (0);
+
+#define CUDA_CHECK(condition) \
+  /* Code block avoids redefinition of cudaError_t error */ \
+  do { \
+    cudaError_t error = condition; \
+    CHECK_EQ(error, cudaSuccess, "CUDA_CHECK")  \
+  } while (0)
 
 using namespace caffe;  // NOLINT(build/namespaces)
 
@@ -51,7 +83,7 @@ static int init_key = -2;
 
 static mxArray* do_forward(const mxArray* const bottom) {
   vector<Blob<float>*>& input_blobs = solver_->net()->input_blobs();
-  mexPrintf("blob size: %d\n",input_blobs.size());
+  //mexPrintf("blob size: %d\n",input_blobs.size());
   CHECK_EQ(static_cast<unsigned int>(mxGetDimensions(bottom)[0]),
       input_blobs.size());
   for (unsigned int i = 0; i < input_blobs.size(); ++i) {
@@ -72,6 +104,55 @@ static mxArray* do_forward(const mxArray* const bottom) {
     }  // switch (Caffe::mode())
   }
   const vector<Blob<float>*>& output_blobs = solver_->net()->ForwardPrefilled();
+  mxArray* mx_out = mxCreateCellMatrix(output_blobs.size(), 1);
+  for (unsigned int i = 0; i < output_blobs.size(); ++i) {
+    // internally data is stored as (width, height, channels, num)
+    // where width is the fastest dimension
+    mwSize dims[4] = {output_blobs[i]->width(), output_blobs[i]->height(),
+      output_blobs[i]->channels(), output_blobs[i]->num()};
+    mxArray* mx_blob =  mxCreateNumericArray(4, dims, mxSINGLE_CLASS, mxREAL);
+    mxSetCell(mx_out, i, mx_blob);
+    float* data_ptr = reinterpret_cast<float*>(mxGetPr(mx_blob));
+    switch (Caffe::mode()) {
+    case Caffe::CPU:
+      memcpy(data_ptr, output_blobs[i]->cpu_data(),
+          sizeof(float) * output_blobs[i]->count());
+      break;
+    case Caffe::GPU:
+      cudaMemcpy(data_ptr, output_blobs[i]->gpu_data(),
+          sizeof(float) * output_blobs[i]->count(), cudaMemcpyDeviceToHost);
+      break;
+    default:
+      LOG(FATAL) << "Unknown Caffe mode.";
+    }  // switch (Caffe::mode())
+  }
+
+  return mx_out;
+}
+
+static mxArray* do_forward_test(const mxArray* const bottom) {
+  vector<Blob<float>*>& input_blobs = solver_->test_net_->input_blobs();
+  //mexPrintf("blob size: %d\n",input_blobs.size());
+  CHECK_EQ(static_cast<unsigned int>(mxGetDimensions(bottom)[0]),
+      input_blobs.size());
+  for (unsigned int i = 0; i < input_blobs.size(); ++i) {
+    const mxArray* const elem = mxGetCell(bottom, i);
+    const float* const data_ptr =
+        reinterpret_cast<const float* const>(mxGetPr(elem));
+    switch (Caffe::mode()) {
+    case Caffe::CPU:
+      memcpy(input_blobs[i]->mutable_cpu_data(), data_ptr,
+          sizeof(float) * input_blobs[i]->count());
+      break;
+    case Caffe::GPU:
+      cudaMemcpy(input_blobs[i]->mutable_gpu_data(), data_ptr,
+          sizeof(float) * input_blobs[i]->count(), cudaMemcpyHostToDevice);
+      break;
+    default:
+      LOG(FATAL) << "Unknown Caffe mode.";
+    }  // switch (Caffe::mode())
+  }
+  const vector<Blob<float>*>& output_blobs = solver_->test_net_->ForwardPrefilled();
   mxArray* mx_out = mxCreateCellMatrix(output_blobs.size(), 1);
   for (unsigned int i = 0; i < output_blobs.size(); ++i) {
     // internally data is stored as (width, height, channels, num)
@@ -159,6 +240,8 @@ static mxArray* do_get_weights() {
   const vector<shared_ptr<Layer<float> > >& layers = solver_->net()->layers();
   const vector<string>& layer_names = solver_->net()->layer_names();
 
+  // char* c_layer_name = mxArrayToString(layer_names);
+  // LOG(INFO) << c_layer_name; 
   // Step 1: count the number of layers with weights
   int num_layers = 0;
   {
@@ -179,7 +262,7 @@ static mxArray* do_get_weights() {
   mxArray* mx_layers;
   {
     const mwSize dims[2] = {num_layers, 1};
-    const char* fnames[2] = {"weights", "layer_names"};
+    const char* fnames[2] = {"layer_names","weights"};
     mx_layers = mxCreateStructArray(2, dims, 2, fnames);
   }
 
@@ -234,8 +317,179 @@ static mxArray* do_get_weights() {
   return mx_layers;
 }
 
+static void do_set_layer_weights(const mxArray* const layer_name,
+    const mxArray* const mx_layer_weights) {
+  const vector<shared_ptr<Layer<float> > >& layers = solver_->net_->layers();
+  //LOG(INFO) << "Done with get solver layers.";
+  const vector<string>& layer_names = solver_->net_->layer_names();
+  //LOG(INFO) << "Done with get solver layer names.";
+
+  char* c_layer_names = mxArrayToString(layer_name);
+  LOG(INFO) << "Looking for: " << c_layer_names;
+
+  for (unsigned int i = 0; i < layers.size(); ++i) {
+    DLOG(INFO) << layer_names[i];
+    if (strcmp(layer_names[i].c_str(),c_layer_names) == 0) {
+      vector<shared_ptr<Blob<float> > >& layer_blobs = layers[i]->blobs();
+      if (layer_blobs.size() == 0) {
+        continue;
+      }
+      DLOG(INFO) << "Found layer " << layer_names[i] << "layer_blobs.size() = " << layer_blobs.size();
+      CHECK_EQ(static_cast<unsigned int>(mxGetDimensions(mx_layer_weights)[0]),
+        layer_blobs.size(), "Num of cells don't match layer_blobs.size");
+      LOG(INFO) << "layer_blobs.size() = " << layer_blobs.size();
+      for (unsigned int j = 0; j < layer_blobs.size(); ++j) {
+        // internally data is stored as (width, height, channels, num)
+        // where width is the fastest dimension
+        const mxArray* const elem = mxGetCell(mx_layer_weights, j);
+        mwSize dims[4] = {layer_blobs[j]->width(), layer_blobs[j]->height(),
+            layer_blobs[j]->channels(), layer_blobs[j]->num()};
+        DLOG(INFO) << dims[0] << " " << dims[1] << " " << dims[2] << " " << dims[3];
+        CHECK_EQ(layer_blobs[j]->count(), mxGetNumberOfElements(elem),
+          "Numel of weights don't match count of layer_blob");
+        const mwSize* dims_elem = mxGetDimensions(elem);
+        DLOG(INFO) << dims_elem[0] << " " << dims_elem[1];
+        const float* const data_ptr =
+            reinterpret_cast<const float* const>(mxGetPr(elem));
+        DLOG(INFO) << "elem: " << data_ptr[0] << " " << data_ptr[1];
+        DLOG(INFO) << "count: " << layer_blobs[j]->count();
+        switch (Caffe::mode()) {
+        case Caffe::CPU:
+          memcpy(layer_blobs[j]->mutable_cpu_data(), data_ptr,
+              sizeof(float) * layer_blobs[j]->count());
+          break;
+        case Caffe::GPU:
+          cudaMemcpy(layer_blobs[j]->mutable_gpu_data(), data_ptr,
+              sizeof(float) * layer_blobs[j]->count(), cudaMemcpyHostToDevice);
+          break;
+        default:
+          LOG(FATAL) << "Unknown Caffe mode.";
+        }
+      }
+    }
+  }
+}
+
+static mxArray* do_get_all_data() {
+  const vector<shared_ptr<Blob<float> > >& blobs = solver_->net_->blobs();
+  const vector<string>& blob_names = solver_->net_->blob_names();
+
+  // Step 1: prepare output array of structures
+  mxArray* mx_all_data;
+  {
+    const int num_blobs[1] = {blobs.size()};
+    const char* fnames[2] = {"name", "data"};
+    mx_all_data = mxCreateStructArray(1, num_blobs, 2, fnames);
+  }
+
+  for (unsigned int i = 0; i < blobs.size(); ++i) {
+    DLOG(INFO) << blob_names[i];
+    mwSize dims[4] = {blobs[i]->width(), blobs[i]->height(),
+        blobs[i]->channels(), blobs[i]->num()};
+    DLOG(INFO) << dims[0] << " " << dims[1] << " " << dims[2] << " " << dims[3];
+    mxArray* mx_blob_data =
+      mxCreateNumericArray(4, dims, mxSINGLE_CLASS, mxREAL);
+
+    float* blob_data_ptr = reinterpret_cast<float*>(mxGetPr(mx_blob_data));
+
+    switch (Caffe::mode()) {
+    case Caffe::CPU:
+      memcpy(blob_data_ptr, blobs[i]->cpu_data(),
+          sizeof(float) * blobs[i]->count());
+      break;
+    case Caffe::GPU:
+      CUDA_CHECK(cudaMemcpy(blob_data_ptr, blobs[i]->gpu_data(),
+          sizeof(float) * blobs[i]->count(), cudaMemcpyDeviceToHost));
+      break;
+    default:
+      LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
+    }
+    mxSetField(mx_all_data, i, "name",
+        mxCreateString(blob_names[i].c_str()));
+    mxSetField(mx_all_data, i, "data",mx_blob_data);
+  }
+  return mx_all_data;
+}
+
+static mxArray* do_get_all_diff() {
+  const vector<shared_ptr<Blob<float> > >& blobs = solver_->net_->blobs();
+  const vector<string>& blob_names = solver_->net_->blob_names();
+
+  // Step 1: prepare output array of structures
+  mxArray* mx_all_diff;
+  {
+    const int num_blobs[1] = {blobs.size()};
+    const char* fnames[2] = {"name", "diff"};
+    mx_all_diff = mxCreateStructArray(1, num_blobs, 2, fnames);
+  }
+
+  for (unsigned int i = 0; i < blobs.size(); ++i) {
+    DLOG(INFO) << blob_names[i];
+    mwSize dims[4] = {blobs[i]->width(), blobs[i]->height(),
+        blobs[i]->channels(), blobs[i]->num()};
+    DLOG(INFO) << dims[0] << " " << dims[1] << " " << dims[2] << " " << dims[3];
+    mxArray* mx_blob_data =
+      mxCreateNumericArray(4, dims, mxSINGLE_CLASS, mxREAL);
+
+    float* blob_data_ptr = reinterpret_cast<float*>(mxGetPr(mx_blob_data));
+
+    switch (Caffe::mode()) {
+    case Caffe::CPU:
+      memcpy(blob_data_ptr, blobs[i]->cpu_diff(),
+          sizeof(float) * blobs[i]->count());
+      break;
+    case Caffe::GPU:
+      CUDA_CHECK(cudaMemcpy(blob_data_ptr, blobs[i]->gpu_diff(),
+          sizeof(float) * blobs[i]->count(), cudaMemcpyDeviceToHost));
+      break;
+    default:
+      LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
+    }
+    mxSetField(mx_all_diff, i, "name",
+        mxCreateString(blob_names[i].c_str()));
+    mxSetField(mx_all_diff, i, "diff",mx_blob_data);
+  }
+  return mx_all_diff;
+}
+
 static void get_weights(MEX_ARGS) {
   plhs[0] = do_get_weights();
+}
+
+
+static void set_weights(MEX_ARGS) {
+ if (nrhs != 1) {
+     LOG(ERROR) << "Given " << nrhs << " arguments expecting 1";
+     mexErrMsgTxt("Wrong number of arguments");
+  }
+  const mxArray* const mx_weights = prhs[0];
+  if (!mxIsStruct(mx_weights)) {
+     mexErrMsgTxt("Input needs to be struct");
+  }
+  int num_layers = mxGetNumberOfElements(mx_weights);
+  // LOG(INFO) << "begin set layers with layer number: " << num_layers;	 
+  for (int i = 0; i < num_layers; ++i) {
+    const mxArray* layer_name= mxGetField(mx_weights,i,"layer_names");
+    const mxArray* weights= mxGetField(mx_weights,i,"weights");
+    do_set_layer_weights(layer_name,weights);
+  }
+}
+
+static void get_all_data(MEX_ARGS) {
+  if (nrhs != 0) {
+    LOG(ERROR) << "Only given " << nrhs << " arguments";
+    mexErrMsgTxt("Wrong number of arguments");
+  }
+  plhs[0] = do_get_all_data();
+}
+
+
+static void get_all_diff(MEX_ARGS) {
+  if (nrhs != 0) {
+    LOG(ERROR) << "Only given " << nrhs << " arguments";
+    mexErrMsgTxt("Wrong number of arguments");
+  }
+  plhs[0] = do_get_all_diff();
 }
 
 static void set_mode_cpu(MEX_ARGS) {
@@ -264,6 +518,14 @@ static void set_device(MEX_ARGS) {
   Caffe::SetDevice(device_id);
 }
 
+static void get_device(MEX_ARGS) {
+    if (nrhs != 0) {
+    LOG(ERROR) << "Only given " << nrhs << " arguments";
+    mexErrMsgTxt("Wrong number of arguments");
+  }
+  Caffe::DeviceQuery();
+}
+
 static void get_init_key(MEX_ARGS) {
   plhs[0] = mxCreateDoubleScalar(init_key);
 }
@@ -281,9 +543,10 @@ static void init(MEX_ARGS) {
   ReadProtoFromTextFile(solver_file, &solver_param);
 
   solver_.reset(new SGDSolver<float>(solver_param));
+  solver_->iter_ = 0;
   // net_ = solver_->net_;
   // mexPrintf("%s\n",solver_->net_->name().c_str());
-  mexPrintf("input blob number: %d\n",solver_->net_->num_inputs());
+  // mexPrintf("input blob number: %d\n",solver_->net_->num_inputs());
   // solver_->net_->CopyTrainedLayersFrom(string(model_file));
 
   //vector<Blob<float>*>& input_blobs = solver_->net()->input_blobs();
@@ -301,7 +564,7 @@ static void init(MEX_ARGS) {
 }
 
 static void reset(MEX_ARGS) {
-  if (solver_->net()) {
+  if (solver_) {
     solver_->ResetNet();
     init_key = -2;
     LOG(INFO) << "Network reset, call init before use it again";
@@ -317,10 +580,12 @@ static void presolve(MEX_ARGS){
 
 static void update(MEX_ARGS) {
   if (solver_->net_) {
+	//LOG(INFO) << "Begin update";
 	solver_->ComputeUpdateValue();
-    LOG(INFO) << "Compute updated values";
+    solver_->iter_++;
+	//LOG(INFO) << "Compute updated values";
 	solver_->net()->Update();
-    LOG(INFO) << "Network updated";    
+    //LOG(INFO) << "Network updated";    
   }
 }
 
@@ -331,6 +596,15 @@ static void forward(MEX_ARGS) {
   }
 
   plhs[0] = do_forward(prhs[0]);
+}
+
+static void forward_test(MEX_ARGS) {
+  if (nrhs != 1) {
+    LOG(ERROR) << "Only given " << nrhs << " arguments";
+    mexErrMsgTxt("Wrong number of arguments");
+  }
+
+  plhs[0] = do_forward_test(prhs[0]);
 }
 
 static void backward(MEX_ARGS) {
@@ -365,6 +639,7 @@ struct handler_registry {
 static handler_registry handlers[] = {
   // Public API functions
   { "forward",            forward         },
+  { "forward_test",		  forward_test    },	
   { "backward",           backward        },
   { "init",               init            },
   { "presolve",           presolve        },
@@ -375,7 +650,11 @@ static handler_registry handlers[] = {
   { "set_phase_train",    set_phase_train },
   { "set_phase_test",     set_phase_test  },
   { "set_device",         set_device      },
+  { "get_device",         get_device      },
   { "get_weights",        get_weights     },
+  { "set_weights",        set_weights     },
+  { "get_all_diff",       get_all_diff    },
+  { "get_all_data",       get_all_data    },
   { "get_init_key",       get_init_key    },
   { "reset",              reset           },
   // The end.
